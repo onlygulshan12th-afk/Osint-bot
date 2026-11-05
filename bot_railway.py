@@ -497,47 +497,140 @@ def api_call(endpoint, query):
         return None
 
 
+# ================== TG PARSER HELPER ==================
+COUNTRY_PREFIX_MAP = [
+    ("+91", "INDIA"),
+    ("+1", "USA / CANADA"),
+    ("+44", "UNITED KINGDOM"),
+    ("+92", "PAKISTAN"),
+    ("+880", "BANGLADESH"),
+    ("+977", "NEPAL"),
+    ("+94", "SRI LANKA"),
+    ("+7", "RUSSIA"),
+    ("+62", "INDONESIA"),
+    ("+60", "MALAYSIA"),
+    ("+63", "PHILIPPINES"),
+    ("+971", "UAE"),
+    ("+966", "SAUDI ARABIA"),
+    ("+98", "IRAN"),
+    ("+90", "TURKEY"),
+    ("+55", "BRAZIL"),
+    ("+234", "NIGERIA"),
+    ("+84", "VIETNAM"),
+    ("+66", "THAILAND"),
+    ("+86", "CHINA"),
+]
+
+def detect_country_from_phone(phone_str):
+    if not phone_str:
+        return None
+    s = re.sub(r"\s+", "", str(phone_str))
+    if not s.startswith("+") and len(s) == 10 and s[0] in "6789":
+        return "INDIA"
+    for prefix, cname in sorted(COUNTRY_PREFIX_MAP, key=lambda x: len(x[0]), reverse=True):
+        if s.startswith(prefix):
+            return cname
+    return None
+
+def extract_tg_fields(data):
+    """Extracts only (tg_id, phone, country) from any dict or raw report string."""
+    tg_id = None
+    phone = None
+    country = None
+
+    # 1. Unwrap nested dict if present
+    target = data
+    if isinstance(data, dict):
+        for key in ("result", "data", "results", "info", "response"):
+            if key in data and data[key] not in (None, "", [], {}):
+                target = data[key]
+                break
+
+    # 2. Check structured keys if target is a dict
+    if isinstance(target, dict):
+        for k in ("telegram_id", "tg_id", "user_id", "id"):
+            if target.get(k):
+                val = str(target[k]).strip()
+                if re.fullmatch(r"\d{5,15}", val):
+                    tg_id = val
+                    break
+        for k in ("phone_number", "phonenumber", "phone", "number", "mobile", "registered_number"):
+            if target.get(k):
+                val = str(target[k]).strip()
+                if len(val) < 25 and re.search(r"\d{7,15}", val):
+                    phone = val
+                    break
+        for k in ("country", "country_name", "region"):
+            if target.get(k):
+                val = str(target[k]).strip()
+                if len(val) < 30:
+                    country = val
+                    break
+
+    # 3. Also parse raw text report (handles multi-line report strings from altaf-api)
+    raw_text = ""
+    if isinstance(target, str):
+        raw_text = target
+    elif isinstance(data, dict):
+        raw_text = " \n ".join(str(v) for v in data.values() if v is not None)
+    else:
+        raw_text = str(target)
+
+    if not tg_id:
+        m_id = re.search(r"(?:TELEGRAM\s*ID|USER\s*ID|TG\s*ID|ID)\s*[:\-]\s*(\d{5,15})", raw_text, re.IGNORECASE)
+        if m_id:
+            tg_id = m_id.group(1).strip()
+
+    if not phone:
+        m_ph = re.search(r"(?:PHONE\s*NUMBER|MOBILE\s*NUMBER|PHONE|NUMBER|MOBILE)\s*[:\-]\s*(\+?[\d\s\-]{8,20})", raw_text, re.IGNORECASE)
+        if m_ph:
+            raw_ph = m_ph.group(1).strip()
+            raw_ph = re.split(r"\n|COUNTRY|ACCOUNT|STATUS", raw_ph, flags=re.IGNORECASE)[0].strip()
+            phone = re.sub(r"\s+", " ", raw_ph)
+        else:
+            m_any_ph = re.search(r"(\+\d{1,4}[\s\-]?\d{6,12})", raw_text)
+            if m_any_ph:
+                phone = re.sub(r"\s+", " ", m_any_ph.group(1).strip())
+
+    if not country:
+        m_ct = re.search(r"COUNTRY\s*[:\-]\s*([A-Za-z\s]+)", raw_text, re.IGNORECASE)
+        if m_ct:
+            c_val = m_ct.group(1).strip()
+            c_val = re.split(r"\s+(?:ACCOUNT|STATUS|VERIFICATION|VERIFIED|DATA|SOURCE|GENERATED)\b", c_val, flags=re.IGNORECASE)[0].strip()
+            if c_val:
+                country = c_val.upper()
+
+    if not country and phone:
+        country = detect_country_from_phone(phone)
+
+    return tg_id, phone, country
+
+
 # ================== RESULT FORMATTER ==================
 def format_result(data, kind, query, uid):
     u = get_user(uid) or {}
     credits = u.get("credits", 0)
     if not data: return error_msg("API se data nahi mila")
 
-    # Special custom styling for TG2Info as requested
+    # Clean, bold 3-line output for TG2Info
     if kind == "tg":
-        result = data
-        if isinstance(data, dict):
-            for key in ("result", "data", "results", "info", "response"):
-                if key in data and data[key] not in (None, "", [], {}):
-                    result = data[key]
-                    break
-        
-        # Extract specific values safely or fallback
-        tg_id = "7501610581"
-        phone = "+6201296252"
-        if isinstance(result, dict):
-            tg_id = str(result.get("id") or result.get("user_id") or result.get("tg_id") or tg_id)
-            phone = str(result.get("phone") or result.get("number") or result.get("mobile") or result.get("phone_number") or phone)
-        elif isinstance(result, str) and len(result) > 5:
-            phone = result
+        tg_id, phone, country = extract_tg_fields(data)
+        if not tg_id and not phone:
+            return error_msg("Is username ka record nahi mila.")
 
-        current_time_str = time.strftime("%d-%b-%Y %I:%M %p", time.localtime())
+        tg_id_disp = b(tg_id) if tg_id else b("N/A")
+        phone_disp = b(phone) if phone else b("N/A")
+        country_disp = b((country or "INDIA").upper())
 
-        custom_tg_output = (
+        return (
             f"📸  <b>{b('Tg2Info Result')}</b>  📸\n\n"
-            f"🎯 <b>{b('Query')}</b> : <code>{H_code(query)}</code>\n\n"
+            f"🎯 <b>{b('Query')}</b> : <b>{b(str(query))}</b>\n\n"
             f"<b>{b('Result')}</b> :\n"
-            f"  ├─ 🏛️ <b>{b('TELEGRAM INTELLIGENCE')}</b>\n"
-            f"  ├─ 📋 <b>{b('REPORT USER IDENTITY DETAILS')}</b>\n"
-            f"  ├─ 🆔 <b>{b('TELEGRAM ID')}</b> : <code>{H_code(tg_id)}</code>\n"
-            f"  ├─ 📱 <b>{b('PHONE NUMBER')}</b> : <code>{H_code(phone)}</code>\n"
-            f"  ├─ 🇮🇳 <b>{b('COUNTRY')}</b> : <b>{b('INDIA')}</b>\n"
-            f"  ├─ 🟢 <b>{b('ACCOUNT STATUS')}</b> : <b>{b('VERIFIED')}</b> : <b>{b('ACTIVE')}</b> ✅\n"
-            f"  ├─ 📦 <b>{b('DATA SOURCE')}</b> : <b>{b('PRIVATE SECURE DB')}</b>\n"
-            f"  └─ 🕒 <b>{b('GENERATED')}</b> : <code>{current_time_str}</code>\n\n"
-            f"💎 <b>{b('Credits Left')}</b> : <b>{credits}</b>{owner_footer()}"
+            f"  ├─ 🆔 <b>{b('TELEGRAM ID')}</b> : <b>{H(tg_id_disp)}</b>\n"
+            f"  ├─ 📱 <b>{b('PHONE NUMBER')}</b> : <b>{H(phone_disp)}</b>\n"
+            f"  └─ 🌍 <b>{b('COUNTRY')}</b> : <b>{H(country_disp)}</b>\n\n"
+            f"💎 <b>{b('Credits Left')}</b> : <b>{b(str(credits))}</b>{owner_footer()}"
         )
-        return custom_tg_output
 
     headers = {
         "num": f"📱  <b>{b('Num2Info Result')}</b>  📱",
@@ -800,6 +893,14 @@ async def do_lookup(update, context, kind):
         return
 
     try:
+        if kind == "tg":
+            tg_id, phone, _ = extract_tg_fields(data)
+            if not tg_id and not phone:
+                add_credits(user.id, CREDIT_PER_LOOKUP)
+                await edit_message_html(context.bot, msg.chat_id, status.message_id,
+                                         error_msg("Is username ka koi record nahi mila. Credit refunded."),
+                                         reply_markup=result_kb())
+                return
         result_text = format_result(data, kind, query, user.id)
     except Exception as e:
         logger.error(f"Format error: {e}")
