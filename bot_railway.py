@@ -499,26 +499,26 @@ def api_call(endpoint, query):
 
 # ================== TG PARSER HELPER ==================
 COUNTRY_PREFIX_MAP = [
-    ("+91", "INDIA"),
-    ("+1", "USA / CANADA"),
-    ("+44", "UNITED KINGDOM"),
-    ("+92", "PAKISTAN"),
-    ("+880", "BANGLADESH"),
-    ("+977", "NEPAL"),
-    ("+94", "SRI LANKA"),
-    ("+7", "RUSSIA"),
-    ("+62", "INDONESIA"),
-    ("+60", "MALAYSIA"),
-    ("+63", "PHILIPPINES"),
+    ("+91", "India"),
+    ("+1", "USA / Canada"),
+    ("+44", "United Kingdom"),
+    ("+92", "Pakistan"),
+    ("+880", "Bangladesh"),
+    ("+977", "Nepal"),
+    ("+94", "Sri Lanka"),
+    ("+7", "Russia"),
+    ("+62", "Indonesia"),
+    ("+60", "Malaysia"),
+    ("+63", "Philippines"),
     ("+971", "UAE"),
-    ("+966", "SAUDI ARABIA"),
-    ("+98", "IRAN"),
-    ("+90", "TURKEY"),
-    ("+55", "BRAZIL"),
-    ("+234", "NIGERIA"),
-    ("+84", "VIETNAM"),
-    ("+66", "THAILAND"),
-    ("+86", "CHINA"),
+    ("+966", "Saudi Arabia"),
+    ("+98", "Iran"),
+    ("+90", "Turkey"),
+    ("+55", "Brazil"),
+    ("+234", "Nigeria"),
+    ("+84", "Vietnam"),
+    ("+66", "Thailand"),
+    ("+86", "China"),
 ]
 
 def detect_country_from_phone(phone_str):
@@ -526,7 +526,7 @@ def detect_country_from_phone(phone_str):
         return None
     s = re.sub(r"\s+", "", str(phone_str))
     if not s.startswith("+") and len(s) == 10 and s[0] in "6789":
-        return "INDIA"
+        return "India"
     for prefix, cname in sorted(COUNTRY_PREFIX_MAP, key=lambda x: len(x[0]), reverse=True):
         if s.startswith(prefix):
             return cname
@@ -538,7 +538,6 @@ def extract_tg_fields(data):
     phone = None
     country = None
 
-    # 1. Unwrap nested dict if present
     target = data
     if isinstance(data, dict):
         for key in ("result", "data", "results", "info", "response"):
@@ -546,7 +545,6 @@ def extract_tg_fields(data):
                 target = data[key]
                 break
 
-    # 2. Check structured keys if target is a dict
     if isinstance(target, dict):
         for k in ("telegram_id", "tg_id", "user_id", "id"):
             if target.get(k):
@@ -567,7 +565,6 @@ def extract_tg_fields(data):
                     country = val
                     break
 
-    # 3. Also parse raw text report (handles multi-line report strings from altaf-api)
     raw_text = ""
     if isinstance(target, str):
         raw_text = target
@@ -598,7 +595,7 @@ def extract_tg_fields(data):
             c_val = m_ct.group(1).strip()
             c_val = re.split(r"\s+(?:ACCOUNT|STATUS|VERIFICATION|VERIFIED|DATA|SOURCE|GENERATED)\b", c_val, flags=re.IGNORECASE)[0].strip()
             if c_val:
-                country = c_val.upper()
+                country = c_val.title()
 
     if not country and phone:
         country = detect_country_from_phone(phone)
@@ -612,24 +609,23 @@ def format_result(data, kind, query, uid):
     credits = u.get("credits", 0)
     if not data: return error_msg("API se data nahi mila")
 
-    # Clean, bold 3-line output for TG2Info
+    # Clean, symbol-free bold English output for TG2Info
     if kind == "tg":
         tg_id, phone, country = extract_tg_fields(data)
         if not tg_id and not phone:
             return error_msg("Is username ka record nahi mila.")
 
-        tg_id_disp = b(tg_id) if tg_id else b("N/A")
-        phone_disp = b(phone) if phone else b("N/A")
-        country_disp = b((country or "INDIA").upper())
+        tg_id_disp = H(tg_id) if tg_id else "N/A"
+        phone_disp = H(phone) if phone else "N/A"
+        country_disp = H(country) if country else "India"
 
         return (
             f"📸  <b>{b('Tg2Info Result')}</b>  📸\n\n"
-            f"🎯 <b>{b('Query')}</b> : <b>{b(str(query))}</b>\n\n"
-            f"<b>{b('Result')}</b> :\n"
-            f"  ├─ 🆔 <b>{b('TELEGRAM ID')}</b> : <b>{H(tg_id_disp)}</b>\n"
-            f"  ├─ 📱 <b>{b('PHONE NUMBER')}</b> : <b>{H(phone_disp)}</b>\n"
-            f"  └─ 🌍 <b>{b('COUNTRY')}</b> : <b>{H(country_disp)}</b>\n\n"
-            f"💎 <b>{b('Credits Left')}</b> : <b>{b(str(credits))}</b>{owner_footer()}"
+            f"🎯 <b>{b('Query')}</b> : <code>{H_code(query)}</code>\n\n"
+            f"<b>• Telegram I'd = {tg_id_disp}</b>\n"
+            f"<b>• Phone number = {phone_disp}</b>\n"
+            f"<b>• Country = {country_disp}</b>\n\n"
+            f"💎 <b>{b('Credits Left')}</b> : <b>{credits}</b>{owner_footer()}"
         )
 
     headers = {
