@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 import requests
+from urllib.parse import quote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatAction
 from telegram.ext import (
@@ -25,6 +26,7 @@ BOT_LINK = "https://t.me/Leonv2osintbot"
 OWNER_USERNAME = "@roushanog"
 OWNER_LINK = "https://t.me/roushanog"
 API_BASE = "https://infoapi.sahaditya7543.workers.dev"
+TG_API_BASE = "https://altaf-api-maker.base44.app/functions/lookup?tool=tgnum&key=Demo&q="
 DB_FILE = os.getenv("DB_FILE", "leon_osint.db").strip() or "leon_osint.db"
 REQUIRED_CHANNELS = [
     {"username": "sterniterspro", "title": "Sterniters Pro", "url": "https://t.me/sterniterspro"},
@@ -39,6 +41,10 @@ START_TIME = time.time()
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Persistent HTTP session for faster API lookups (connection pooling)
+HTTP_SESSION = requests.Session()
+HTTP_SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
 
 
 # ================== FONTS ==================
@@ -370,13 +376,13 @@ def help_msg():
     return (
         f"📖  <b>{b('Help Menu')}</b>  📖\n\n"
         f"📱 <b>{b('NUM2INFO')}</b>\n<code>/num 9876543210</code>\nPhone number info.\n\n"
-        f"🆔 <b>{b('AADHAR2INFO')}</b>\n<code>/aadhar 123456789012</code>\n12-digit Aadhar record.\n\n"
-        f"📸 <b>{b('TG2INFO')}</b>\n<code>/tg 6910286881</code>\nTelegram user info.\n\n"
+        f"🆔 <b>{b('AADHAR2INFO')}</b>\n<code>/aadhar [Aadhaar Redacted]</code>\n12-digit Aadhar record.\n\n"
+        f"📸 <b>{b('TG2INFO')}</b>\n<code>/tg @username</code>\nTelegram user to number info.\n\n"
         f"🔍 <b>{b('SEARCH')}</b>\n<code>/search keyword</code>\nMulti-index search.\n\n"
         f"🎟️ <b>{b('REDEEM')}</b> : <code>/redeem CODE</code>\n"
         f"🎁 <b>{b('REFERRAL')}</b> : <code>/refer</code>\n"
         f"💎 <b>{b('CREDITS')}</b> : <code>/credits</code>\n\n"
-        f"💡 Seedha number bhi bhej sakta hai!{owner_footer()}")
+        f"💡 Seedha number ya @username bhi bhej sakta hai!{owner_footer()}")
 
 
 def credits_msg(uid):
@@ -432,12 +438,17 @@ def no_credits_msg():
 # ================== API ==================
 def api_call(endpoint, query):
     try:
-        r = requests.get(f"{API_BASE}{endpoint}", params={"q": query}, timeout=30,
-                          headers={"User-Agent": "Mozilla/5.0"})
-        if r.status_code != 200: return None
+        if endpoint == "/tg":
+            clean_q = str(query).strip().lstrip("@")
+            url = f"{TG_API_BASE}{quote(clean_q)}"
+            r = HTTP_SESSION.get(url, timeout=15)
+        else:
+            r = HTTP_SESSION.get(f"{API_BASE}{endpoint}", params={"q": query}, timeout=20)
+        if r.status_code != 200:
+            return None
         return r.json()
     except Exception as e:
-        logger.error(f"API error: {e}")
+        logger.error(f"API error ({endpoint}): {e}")
         return None
 
 
@@ -463,18 +474,21 @@ def format_result(data, kind, query, uid):
                 break
 
     PRIORITY = ["name", "full_name", "father_name", "fathersname", "mother_name",
-                "address", "phone_number", "phonenumber", "mobile", "aadhar_number",
+                "address", "phone_number", "phonenumber", "phone", "number",
+                "registered_number", "mobile", "aadhar_number",
                 "aadharnumber", "aadhar", "other_number", "othernumber",
                 "email", "dob", "gender", "circle", "operator",
                 "state", "district", "pincode", "village", "city",
                 "source", "connected_numbers", "username", "first_name",
-                "last_name", "user_id", "id", "photo"]
+                "last_name", "user_id", "tg_id", "id", "country", "photo"]
 
     LABELS = {"fathersname": "Father's Name", "phonenumber": "Phone Number",
+              "phone": "Phone Number", "number": "Phone Number",
+              "registerednumber": "Registered Number",
               "aadharnumber": "Aadhar Number", "othernumber": "Other Number",
               "connected_numbers": "Connected Numbers", "full_name": "Full Name",
               "first_name": "First Name", "last_name": "Last Name",
-              "user_id": "User ID"}
+              "user_id": "User ID", "tgid": "Telegram ID"}
 
     def pretty_label(k):
         key = k.lower().replace("_", "")
@@ -651,8 +665,8 @@ async def do_lookup(update, context, kind):
             return
 
     if not context.args:
-        examples = {"num": "/num 9876543210", "aadhar": "/aadhar 123456789012",
-                    "tg": "/tg 6910286881", "search": "/search keyword"}
+        examples = {"num": "/num 9876543210", "aadhar": "/aadhar [Aadhaar Redacted]",
+                    "tg": "/tg @username", "search": "/search keyword"}
         await send_html(context.bot, msg.chat_id,
                          f"⚠️ <b>{b('Usage')}</b>\n\n<code>{examples[kind]}</code>")
         return
@@ -669,7 +683,7 @@ async def do_lookup(update, context, kind):
         await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.TYPING)
     except: pass
 
-    status = await send_html(context.bot, msg.chat_id, thinking_msg(0))
+    status = await send_html(context.bot, msg.chat_id, thinking_msg(2))
     if not status: return
 
     endpoint = {"num": "/num", "aadhar": "/aadhar", "tg": "/tg", "search": "/search"}[kind]
@@ -678,11 +692,6 @@ async def do_lookup(update, context, kind):
         data = await asyncio.to_thread(api_call, endpoint, query)
     except Exception as e:
         logger.error(f"API error: {e}")
-
-    for step in range(5):
-        try: await status.edit_text(thinking_msg(step), parse_mode=ParseMode.HTML)
-        except: pass
-        await asyncio.sleep(0.3)
 
     if not data:
         add_credits(user.id, CREDIT_PER_LOOKUP)
@@ -722,15 +731,7 @@ async def redeem_cmd(update, context):
     code = context.args[0].strip().upper()
     status = await send_html(context.bot, msg.chat_id,
                               f"🎟️ <b>{b('Checking code')}...</b>\n\n"
-                              f"<code>[{progress_bar(30)}] 30%</code>")
-    if status:
-        await asyncio.sleep(0.5)
-        try:
-            await status.edit_text(
-                f"🎟️ <b>{b('Validating')}...</b>\n\n<code>[{progress_bar(60)}] 60%</code>",
-                parse_mode=ParseMode.HTML)
-        except: pass
-        await asyncio.sleep(0.5)
+                              f"<code>[{progress_bar(60)}] 60%</code>")
 
     result = use_code(code, user.id)
     if result == "invalid":
@@ -870,20 +871,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif d == "new_lookup":
         await edit_q(q,
             f"🔍 <b>{b('New Lookup')}</b>\n\nCommands:\n"
-            f"<code>/num 9876543210</code>\n<code>/aadhar 123456789012</code>\n"
-            f"<code>/tg 6910286881</code>\n<code>/search keyword</code>",
+            f"<code>/num 9876543210</code>\n<code>/aadhar [Aadhaar Redacted]</code>\n"
+            f"<code>/tg @username</code>\n<code>/search keyword</code>",
             reply_markup=back_kb())
     elif d == "hlp_num":
         await edit_q(q, f"📱 <b>{b('NUM2INFO')}</b>\n\n<code>/num 9876543210</code>\n\n"
                         f"Phone number info.\n💰 Cost : {CREDIT_PER_LOOKUP} credit",
                       reply_markup=back_kb())
     elif d == "hlp_aadhar":
-        await edit_q(q, f"🆔 <b>{b('AADHAR2INFO')}</b>\n\n<code>/aadhar 123456789012</code>\n\n"
+        await edit_q(q, f"🆔 <b>{b('AADHAR2INFO')}</b>\n\n<code>/aadhar [Aadhaar Redacted]</code>\n\n"
                         f"12-digit Aadhar.\n💰 Cost : {CREDIT_PER_LOOKUP} credit",
                       reply_markup=back_kb())
     elif d == "hlp_tg":
-        await edit_q(q, f"📸 <b>{b('TG2INFO')}</b>\n\n<code>/tg 6910286881</code>\n\n"
-                        f"Telegram user info.\n💰 Cost : {CREDIT_PER_LOOKUP} credit",
+        await edit_q(q, f"📸 <b>{b('TG2INFO')}</b>\n\n<code>/tg @username</code>\n\n"
+                        f"Telegram user to number info.\n💰 Cost : {CREDIT_PER_LOOKUP} credit",
                       reply_markup=back_kb())
     elif d == "hlp_search":
         await edit_q(q, f"🔍 <b>{b('SEARCH')}</b>\n\n<code>/search keyword</code>\n\n"
@@ -1058,6 +1059,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if re.fullmatch(r"\+?\d{10,13}", text):
         context.args = [text]; await do_lookup(update, context, "num"); return
     if re.fullmatch(r"\d{7,10}", text):
+        context.args = [text]; await do_lookup(update, context, "tg"); return
+    if re.fullmatch(r"@[A-Za-z0-9_]{3,32}", text):
         context.args = [text]; await do_lookup(update, context, "tg"); return
 
     context.args = text.split()
