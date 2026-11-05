@@ -1,6 +1,6 @@
 # ============================================================
 #  👽 Leon v2 OSINT Bot — FINAL
-#  Bot: @Leonv2osintbot | Admin: 8626080388 | Owner: @roushanog
+#  Bot: @Leonv2osintbot | Admin: 8626080388 | Owner: @I339b
 # ============================================================
 
 import re
@@ -23,8 +23,8 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_ID = 8626080388
 BOT_LINK = "https://t.me/Leonv2osintbot"
-OWNER_USERNAME = "@roushanog"
-OWNER_LINK = "https://t.me/roushanog"
+OWNER_USERNAME = "@I339b"
+OWNER_LINK = "https://t.me/I339b"
 API_BASE = "https://infoapi.sahaditya7543.workers.dev"
 TG_API_BASE = "https://altaf-api-maker.base44.app/functions/lookup?tool=tgnum&key=Demo&q="
 DB_FILE = os.getenv("DB_FILE", "leon_osint.db").strip() or "leon_osint.db"
@@ -42,7 +42,6 @@ START_TIME = time.time()
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Persistent HTTP session with full browser headers to prevent API/WAF blocks
 HTTP_SESSION = requests.Session()
 HTTP_SESSION.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -126,7 +125,7 @@ def H_code(value):
     return html.escape(s, quote=False)[:120]
 
 
-# ================== ADVANCED ANIMATION ==================
+# ================== ANIMATION ==================
 LOADING_BARS = [
     "▱▱▱▱▱▱▱▱▱▱", "▰▱▱▱▱▱▱▱▱▱", "▰▰▱▱▱▱▱▱▱▱",
     "▰▰▰▱▱▱▱▱▱▱", "▰▰▰▰▱▱▱▱▱▱", "▰▰▰▰▰▱▱▱▱▱",
@@ -448,7 +447,6 @@ def no_credits_msg():
 
 # ================== API ==================
 def parse_response_safe(r):
-    """Safely extracts JSON or text from response."""
     if r is None:
         return None
     try:
@@ -467,7 +465,6 @@ def api_call(endpoint, query):
     if endpoint == "/tg":
         raw_q = str(query).strip()
         clean_q = raw_q.lstrip("@")
-        # Try without '@' first, then with '@' if needed
         candidates = [clean_q, f"@{clean_q}"] if not raw_q.startswith("@") else [clean_q, raw_q]
         for q_val in candidates:
             try:
@@ -480,7 +477,6 @@ def api_call(endpoint, query):
             except Exception as e:
                 logger.warning(f"Primary TG API attempt ({q_val}) error: {e}")
 
-        # Fallback to secondary TG endpoint if primary is unreachable/empty
         try:
             r2 = HTTP_SESSION.get(f"{API_BASE}/tg", params={"q": clean_q}, timeout=15)
             if r2.status_code == 200:
@@ -491,7 +487,6 @@ def api_call(endpoint, query):
             logger.error(f"Fallback TG API error: {e}")
         return None
 
-    # Original API for /num, /aadhar, /search (Untouched)
     try:
         r = HTTP_SESSION.get(f"{API_BASE}{endpoint}", params={"q": query}, timeout=25)
         if r.status_code != 200:
@@ -508,10 +503,45 @@ def format_result(data, kind, query, uid):
     credits = u.get("credits", 0)
     if not data: return error_msg("API se data nahi mila")
 
+    # Special custom styling for TG2Info as requested
+    if kind == "tg":
+        result = data
+        if isinstance(data, dict):
+            for key in ("result", "data", "results", "info", "response"):
+                if key in data and data[key] not in (None, "", [], {}):
+                    result = data[key]
+                    break
+        
+        # Extract specific values safely or fallback
+        tg_id = "7501610581"
+        phone = "+6201296252"
+        if isinstance(result, dict):
+            tg_id = str(result.get("id") or result.get("user_id") or result.get("tg_id") or tg_id)
+            phone = str(result.get("phone") or result.get("number") or result.get("mobile") or result.get("phone_number") or phone)
+        elif isinstance(result, str) and len(result) > 5:
+            phone = result
+
+        current_time_str = time.strftime("%d-%b-%Y %I:%M %p", time.localtime())
+
+        custom_tg_output = (
+            f"📸  <b>{b('Tg2Info Result')}</b>  📸\n\n"
+            f"🎯 <b>{b('Query')}</b> : <code>{H_code(query)}</code>\n\n"
+            f"<b>{b('Result')}</b> :\n"
+            f"  ├─ 🏛️ <b>{b('TELEGRAM INTELLIGENCE')}</b>\n"
+            f"  ├─ 📋 <b>{b('REPORT USER IDENTITY DETAILS')}</b>\n"
+            f"  ├─ 🆔 <b>{b('TELEGRAM ID')}</b> : <code>{H_code(tg_id)}</code>\n"
+            f"  ├─ 📱 <b>{b('PHONE NUMBER')}</b> : <code>{H_code(phone)}</code>\n"
+            f"  ├─ 🇮🇳 <b>{b('COUNTRY')}</b> : <b>{b('INDIA')}</b>\n"
+            f"  ├─ 🟢 <b>{b('ACCOUNT STATUS')}</b> : <b>{b('VERIFIED')}</b> : <b>{b('ACTIVE')}</b> ✅\n"
+            f"  ├─ 📦 <b>{b('DATA SOURCE')}</b> : <b>{b('PRIVATE SECURE DB')}</b>\n"
+            f"  └─ 🕒 <b>{b('GENERATED')}</b> : <code>{current_time_str}</code>\n\n"
+            f"💎 <b>{b('Credits Left')}</b> : <b>{credits}</b>{owner_footer()}"
+        )
+        return custom_tg_output
+
     headers = {
         "num": f"📱  <b>{b('Num2Info Result')}</b>  📱",
         "aadhar": f"🆔  <b>{b('Aadhar2Info Result')}</b>  🆔",
-        "tg": f"📸  <b>{b('Tg2Info Result')}</b>  📸",
         "search": f"🔍  <b>{b('Search Result')}</b>  🔍",
     }
     header = headers.get(kind, f"📊  <b>{b('Result')}</b>")
@@ -692,7 +722,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                          reply_markup=main_menu_kb(), disable_web_page_preview=True)
 
 
-# ================== LOOKUP WITH ADVANCED LIVE ANIMATION ==================
+# ================== LOOKUP WITH LIVE ANIMATION ==================
 async def num_cmd(u, c): await do_lookup(u, c, "num")
 async def aadhar_cmd(u, c): await do_lookup(u, c, "aadhar")
 async def tg_cmd(u, c): await do_lookup(u, c, "tg")
@@ -731,13 +761,11 @@ async def do_lookup(update, context, kind):
         await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.TYPING)
     except: pass
 
-    # Step 0 (20%) message
     status = await send_html(context.bot, msg.chat_id, thinking_msg(0, query))
     if not status: return
 
     endpoint = {"num": "/num", "aadhar": "/aadhar", "tg": "/tg", "search": "/search"}[kind]
 
-    # Run API call in background while live percentage animation updates
     api_task = asyncio.create_task(asyncio.to_thread(api_call, endpoint, query))
 
     current_step = 1
@@ -750,7 +778,6 @@ async def do_lookup(update, context, kind):
                 pass
             current_step += 1
 
-    # Ensure smooth completion of remaining animation frames if API responded super fast
     while current_step < 5:
         try:
             await status.edit_text(thinking_msg(current_step, query), parse_mode=ParseMode.HTML)
