@@ -42,9 +42,13 @@ START_TIME = time.time()
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Persistent HTTP session for faster API lookups (connection pooling)
+# Persistent HTTP session with full browser headers to prevent API/WAF blocks
 HTTP_SESSION = requests.Session()
-HTTP_SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
+HTTP_SESSION.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+})
 
 
 # ================== FONTS ==================
@@ -122,7 +126,7 @@ def H_code(value):
     return html.escape(s, quote=False)[:120]
 
 
-# ================== ANIMATION ==================
+# ================== ADVANCED ANIMATION ==================
 LOADING_BARS = [
     "▱▱▱▱▱▱▱▱▱▱", "▰▱▱▱▱▱▱▱▱▱", "▰▰▱▱▱▱▱▱▱▱",
     "▰▰▰▱▱▱▱▱▱▱", "▰▰▰▰▱▱▱▱▱▱", "▰▰▰▰▰▱▱▱▱▱",
@@ -131,7 +135,28 @@ LOADING_BARS = [
 ]
 
 def progress_bar(pct):
-    return LOADING_BARS[min(int(pct / 10), 10)]
+    return LOADING_BARS[min(max(int(pct / 10), 0), 10)]
+
+ANIM_STEPS = [
+    (20, "⚡", "Initializing OSINT Engine", "Connecting to secure nodes..."),
+    (45, "🛰️", "Querying Intelligence Server", "Bypassing gateway & fetching packets..."),
+    (70, "🔍", "Scanning Database Records", "Matching target identifier..."),
+    (90, "🧬", "Decrypting & Parsing Data", "Formatting response payload..."),
+    (100, "✅", "Scan Complete", "Rendering output..."),
+]
+
+def thinking_msg(step=0, query=""):
+    idx = min(max(step, 0), len(ANIM_STEPS) - 1)
+    pct, icon, stage, detail = ANIM_STEPS[idx]
+    q_line = f"🎯 <b>{b('Target')}</b> : <code>{H_code(query)}</code>\n\n" if query else ""
+    return (
+        f"👽  <b>{b('Leon v2 OSINT Scanner')}</b>  👽\n\n"
+        f"{q_line}"
+        f"{icon} <b>{b(stage)}...</b>\n"
+        f"<i>{detail}</i>\n\n"
+        f"<code>[{progress_bar(pct)}] {pct}%</code>\n\n"
+        f"⏳ <b>{sc('Please wait')}...</b>"
+    )
 
 
 # ================== DATABASE ==================
@@ -246,7 +271,6 @@ def mark_join_verified(uid):
             (uid, int(time.time())))
 
 def is_join_verified(uid):
-    """Verified in last 1 hour."""
     r = db_one("SELECT * FROM join_verified WHERE user_id=?", (uid,))
     if not r: return False
     return (int(time.time()) - r["verified_at"]) < 3600
@@ -257,7 +281,6 @@ def clear_join_verified(uid):
 
 # ================== FORCE JOIN ==================
 async def get_missing_channels(bot, uid):
-    """Returns list of channels user hasn't joined."""
     missing = []
     for ch in REQUIRED_CHANNELS:
         try:
@@ -266,9 +289,7 @@ async def get_missing_channels(bot, uid):
             if status not in ("member", "administrator", "creator"):
                 missing.append(ch)
         except Exception as e:
-            err = str(e).lower()
             logger.warning(f"Channel check @{ch['username']} for {uid}: {e}")
-            # Any error → block user (force join)
             missing.append(ch)
     return missing
 
@@ -410,16 +431,6 @@ def referral_msg(uid, bot_username):
         f"Link share karo aur credits kamao!{owner_footer()}")
 
 
-def thinking_msg(step=0):
-    frames = [f"🔍 {b('Searching')}...", f"📡 {b('Connecting')}...",
-              f"⬇️ {b('Fetching data')}...", f"🎨 {b('Formatting')}...",
-              f"📤 {b('Almost done')}..."]
-    pct = min(int((step % 5) * 20), 95)
-    return (f"👽  <b>{b('Processing')}</b>  👽\n\n"
-            f"{frames[min(step, len(frames) - 1)]}\n\n"
-            f"<code>[{progress_bar(pct)}] {pct}%</code>\n\n⏳ Please wait...")
-
-
 def error_msg(reason=""):
     r = f"\n💡 {H(reason)}" if reason else ""
     return (f"❌  <b>{b('Oops! Kuch galat ho gaya')}</b>  ❌{r}\n\n"
@@ -436,14 +447,53 @@ def no_credits_msg():
 
 
 # ================== API ==================
-def api_call(endpoint, query):
+def parse_response_safe(r):
+    """Safely extracts JSON or text from response."""
+    if r is None:
+        return None
     try:
-        if endpoint == "/tg":
-            clean_q = str(query).strip().lstrip("@")
-            url = f"{TG_API_BASE}{quote(clean_q)}"
-            r = HTTP_SESSION.get(url, timeout=15)
-        else:
-            r = HTTP_SESSION.get(f"{API_BASE}{endpoint}", params={"q": query}, timeout=20)
+        data = r.json()
+        if data:
+            return data
+    except Exception:
+        pass
+    txt = (r.text or "").strip()
+    if txt and not txt.startswith("<!DOCTYPE") and not txt.startswith("<html"):
+        return {"result": txt}
+    return None
+
+
+def api_call(endpoint, query):
+    if endpoint == "/tg":
+        raw_q = str(query).strip()
+        clean_q = raw_q.lstrip("@")
+        # Try without '@' first, then with '@' if needed
+        candidates = [clean_q, f"@{clean_q}"] if not raw_q.startswith("@") else [clean_q, raw_q]
+        for q_val in candidates:
+            try:
+                url = f"{TG_API_BASE}{quote(q_val)}"
+                r = HTTP_SESSION.get(url, timeout=15)
+                if r.status_code in (200, 201, 400, 404, 422):
+                    parsed = parse_response_safe(r)
+                    if parsed:
+                        return parsed
+            except Exception as e:
+                logger.warning(f"Primary TG API attempt ({q_val}) error: {e}")
+
+        # Fallback to secondary TG endpoint if primary is unreachable/empty
+        try:
+            r2 = HTTP_SESSION.get(f"{API_BASE}/tg", params={"q": clean_q}, timeout=15)
+            if r2.status_code == 200:
+                parsed2 = parse_response_safe(r2)
+                if parsed2:
+                    return parsed2
+        except Exception as e:
+            logger.error(f"Fallback TG API error: {e}")
+        return None
+
+    # Original API for /num, /aadhar, /search (Untouched)
+    try:
+        r = HTTP_SESSION.get(f"{API_BASE}{endpoint}", params={"q": query}, timeout=25)
         if r.status_code != 200:
             return None
         return r.json()
@@ -468,8 +518,8 @@ def format_result(data, kind, query, uid):
 
     result = data
     if isinstance(data, dict):
-        for key in ("result", "data", "results", "info"):
-            if key in data and data[key]:
+        for key in ("result", "data", "results", "info", "response"):
+            if key in data and data[key] not in (None, "", [], {}):
                 result = data[key]
                 break
 
@@ -480,7 +530,7 @@ def format_result(data, kind, query, uid):
                 "email", "dob", "gender", "circle", "operator",
                 "state", "district", "pincode", "village", "city",
                 "source", "connected_numbers", "username", "first_name",
-                "last_name", "user_id", "tg_id", "id", "country", "photo"]
+                "last_name", "user_id", "tg_id", "id", "country", "status", "message", "photo"]
 
     LABELS = {"fathersname": "Father's Name", "phonenumber": "Phone Number",
               "phone": "Phone Number", "number": "Phone Number",
@@ -618,7 +668,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_exec("UPDATE users SET last_seen=?, username=?, first_name=? WHERE user_id=?",
                 (int(time.time()), user.username or "", user.first_name or "", user.id))
 
-    # FORCE JOIN (admin skip)
     if user.id != ADMIN_ID:
         missing = await get_missing_channels(context.bot, user.id)
         if missing:
@@ -643,7 +692,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                          reply_markup=main_menu_kb(), disable_web_page_preview=True)
 
 
-# ================== LOOKUP ==================
+# ================== LOOKUP WITH ADVANCED LIVE ANIMATION ==================
 async def num_cmd(u, c): await do_lookup(u, c, "num")
 async def aadhar_cmd(u, c): await do_lookup(u, c, "aadhar")
 async def tg_cmd(u, c): await do_lookup(u, c, "tg")
@@ -656,7 +705,6 @@ async def do_lookup(update, context, kind):
     if not get_user(user.id):
         create_user(user.id, user.username or "", user.first_name or "")
 
-    # FORCE JOIN (admin skip)
     if user.id != ADMIN_ID:
         missing = await get_missing_channels(context.bot, user.id)
         if missing:
@@ -683,15 +731,39 @@ async def do_lookup(update, context, kind):
         await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.TYPING)
     except: pass
 
-    status = await send_html(context.bot, msg.chat_id, thinking_msg(2))
+    # Step 0 (20%) message
+    status = await send_html(context.bot, msg.chat_id, thinking_msg(0, query))
     if not status: return
 
     endpoint = {"num": "/num", "aadhar": "/aadhar", "tg": "/tg", "search": "/search"}[kind]
+
+    # Run API call in background while live percentage animation updates
+    api_task = asyncio.create_task(asyncio.to_thread(api_call, endpoint, query))
+
+    current_step = 1
+    while not api_task.done() and current_step < 4:
+        await asyncio.sleep(0.45)
+        if not api_task.done():
+            try:
+                await status.edit_text(thinking_msg(current_step, query), parse_mode=ParseMode.HTML)
+            except:
+                pass
+            current_step += 1
+
+    # Ensure smooth completion of remaining animation frames if API responded super fast
+    while current_step < 5:
+        try:
+            await status.edit_text(thinking_msg(current_step, query), parse_mode=ParseMode.HTML)
+        except:
+            pass
+        current_step += 1
+        await asyncio.sleep(0.22)
+
     data = None
     try:
-        data = await asyncio.to_thread(api_call, endpoint, query)
+        data = await api_task
     except Exception as e:
-        logger.error(f"API error: {e}")
+        logger.error(f"API task error: {e}")
 
     if not data:
         add_credits(user.id, CREDIT_PER_LOOKUP)
@@ -700,7 +772,8 @@ async def do_lookup(update, context, kind):
                                  reply_markup=result_kb())
         return
 
-    try: result_text = format_result(data, kind, query, user.id)
+    try:
+        result_text = format_result(data, kind, query, user.id)
     except Exception as e:
         logger.error(f"Format error: {e}")
         result_text = error_msg("Data format error")
@@ -731,7 +804,15 @@ async def redeem_cmd(update, context):
     code = context.args[0].strip().upper()
     status = await send_html(context.bot, msg.chat_id,
                               f"🎟️ <b>{b('Checking code')}...</b>\n\n"
-                              f"<code>[{progress_bar(60)}] 60%</code>")
+                              f"<code>[{progress_bar(40)}] 40%</code>")
+    if status:
+        await asyncio.sleep(0.35)
+        try:
+            await status.edit_text(
+                f"🎟️ <b>{b('Validating')}...</b>\n\n<code>[{progress_bar(85)}] 85%</code>",
+                parse_mode=ParseMode.HTML)
+        except: pass
+        await asyncio.sleep(0.35)
 
     result = use_code(code, user.id)
     if result == "invalid":
@@ -831,7 +912,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not get_user(uid):
         create_user(uid, q.from_user.username or "", q.from_user.first_name or "")
 
-    # Special: verify join
     if d == "check_join_now":
         missing = await get_missing_channels(context.bot, uid)
         if missing:
@@ -846,7 +926,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=main_menu_kb())
         return
 
-    # Force join for other buttons (admin skip)
     if uid != ADMIN_ID and d != "main_menu":
         missing = await get_missing_channels(context.bot, uid)
         if missing:
